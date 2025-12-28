@@ -54,4 +54,9 @@ public class Product {
         }
         stockQuantity += quantity;
     }
+
+    public BigDecimal calculateBase(){
+        return this.price == null ? BigDecimal.ZERO : price;
+    }
+
 }
