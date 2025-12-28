@@ -1,8 +1,11 @@
 package com.seowon.coding.controller;
 
 import com.seowon.coding.domain.model.Order;
+import com.seowon.coding.dto.request.OrderRequest;
+import com.seowon.coding.service.OrderProduct;
 import com.seowon.coding.service.OrderService;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.jaxb.SpringDataJaxb.OrderDto;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -66,5 +69,22 @@ public class OrderController {
      *   ]
      * }
      */
-    //
+    @PostMapping
+    public ResponseEntity<Order> createOrder(@RequestBody OrderRequest request) {
+        List<Long> productIds = request.products()
+            .stream()
+            .map(OrderProduct::getProductId)
+            .toList();
+
+        List<Integer> quantities = request.products()
+            .stream()
+            .map(OrderProduct::getQuantity)
+            .toList();
+
+        Order order = orderService.placeOrder(request.customerName(), request.customerEmail(),
+            productIds, quantities);
+        return ResponseEntity
+            .status(HttpStatus.CREATED)
+            .body(order);
+    }
 }
