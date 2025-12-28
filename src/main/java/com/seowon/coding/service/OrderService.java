@@ -1,6 +1,8 @@
 package com.seowon.coding.service;
 
 import com.seowon.coding.domain.model.Order;
+import com.seowon.coding.domain.model.Order.OrderBuilder;
+import com.seowon.coding.domain.model.Order.OrderStatus;
 import com.seowon.coding.domain.model.OrderItem;
 import com.seowon.coding.domain.model.ProcessingStatus;
 import com.seowon.coding.domain.model.Product;
@@ -8,6 +10,8 @@ import com.seowon.coding.domain.repository.OrderRepository;
 import com.seowon.coding.domain.repository.ProcessingStatusRepository;
 import com.seowon.coding.domain.repository.ProductRepository;
 import lombok.RequiredArgsConstructor;
+import org.aspectj.weaver.ast.Or;
+import org.springframework.data.crossstore.ChangeSetPersister.NotFoundException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -64,7 +68,41 @@ public class OrderService {
         // * order 를 저장
         // * 각 Product 의 재고를 수정
         // * placeOrder 메소드의 시그니처는 변경하지 않은 채 구현하세요.
-        return null;
+
+
+        Order order = Order.builder()
+            .customerName(customerName)
+            .customerEmail(customerEmail)
+            .status(Order.OrderStatus.PENDING)
+            .orderDate(LocalDateTime.now())
+            .items(new ArrayList<>())
+            .totalAmount(BigDecimal.ZERO)
+            .build();
+
+        int index= 0;
+        for(Long pid: productIds){
+            Product product = productRepository.findById(pid)
+                .orElseThrow(() -> new IllegalArgumentException("Product not found: " + pid));
+
+            int qty = quantities.get(index);
+
+            //재고 수정
+            product.decreaseStock(qty);
+
+            OrderItem orderItem = OrderItem.builder()
+                .quantity(qty)
+                .product(product)
+                .price(product.getPrice())
+                .build();
+            order.addItem(orderItem);
+
+            productRepository.save(product);
+            index++;
+        }
+        order.recalculateTotalAmount();
+        orderRepository.save(order);
+
+        return order;
     }
 
     /**
@@ -119,10 +157,10 @@ public class OrderService {
             subtotal = subtotal.add(product.getPrice().multiply(BigDecimal.valueOf(qty)));
         }
 
-        BigDecimal shipping = subtotal.compareTo(new BigDecimal("100.00")) >= 0 ? BigDecimal.ZERO : new BigDecimal("5.00");
-        BigDecimal discount = (couponCode != null && couponCode.startsWith("SALE")) ? new BigDecimal("10.00") : BigDecimal.ZERO;
+        BigDecimal shipping = order.calculateShipFee(subtotal);
+        BigDecimal discount = order.calculateDiscount(couponCode);
 
-        order.setTotalAmount(subtotal.add(shipping).subtract(discount));
+        order.setTotalAmount(subtotal,shipping,discount);
         order.setStatus(Order.OrderStatus.PROCESSING);
         return orderRepository.save(order);
     }
@@ -137,6 +175,9 @@ public class OrderService {
     public void bulkShipOrdersParent(String jobId, List<Long> orderIds) {
         ProcessingStatus ps = processingStatusRepository.findByJobId(jobId)
                 .orElseGet(() -> processingStatusRepository.save(ProcessingStatus.builder().jobId(jobId).build()));
+        /**
+         * 위처럼 작성할시 가독성이 좋지않고, 찾지못한 JobId를 새로 생성하는것은 올바르지 못합니다. orElseGet으로 처리하지말고 orElseThrow(NotFoundException::new)로 예외전파 하는것을 권장합니다.
+         */
         ps.markRunning(orderIds == null ? 0 : orderIds.size());
         processingStatusRepository.save(ps);
 
@@ -144,8 +185,16 @@ public class OrderService {
         for (Long orderId : (orderIds == null ? List.<Long>of() : orderIds)) {
             try {
                 // 오래 걸리는 작업 이라는 가정 시뮬레이션 (예: 외부 시스템 연동, 대용량 계산 등)
+                /**
+                 * 만약 오래걸리는 작업이 실패한다면 롤백을 아주 크게해야하므로 실패시 손해가 너무큽니다.
+                 * 작업을 끊어서 처리하는걸 권장합니다.
+                 */
                 orderRepository.findById(orderId).ifPresent(o -> o.setStatus(Order.OrderStatus.PROCESSING));
                 // 중간 진행률 저장
+                /**
+                 * 이렇게 메서드에서 같은 클래스 내의 메서드를 호출하게되면 Spring의 AOP proxy가 작동하지않아 트랜잭션이 정상적으로 작동하지않습니다. 이를 자가호출문제라고 합니다.
+                 * 이를 해결하기 위해서 트랜잭션 분리를 권장합니다.
+                 */
                 this.updateProgressRequiresNew(jobId, ++processed, orderIds.size());
             } catch (Exception e) {
             }

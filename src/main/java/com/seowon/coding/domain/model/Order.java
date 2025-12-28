@@ -56,7 +56,20 @@ public class Order {
                 .map(OrderItem::getSubtotal)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
     }
-    
+
+    public BigDecimal calculateShipFee(BigDecimal subtotal){
+        return subtotal.compareTo(new BigDecimal("100.00")) >= 0 ? BigDecimal.ZERO : new BigDecimal("5.00");
+    }
+
+    public BigDecimal calculateDiscount(String couponCode){
+        return (couponCode != null && couponCode.startsWith("SALE")) ? new BigDecimal("10.00") : BigDecimal.ZERO;
+    }
+
+    public void setTotalAmount(BigDecimal subtotal, BigDecimal shipping, BigDecimal discount){
+        this.totalAmount = subtotal.add(shipping).subtract(discount);
+    }
+
+
     public void markAsProcessing() {
         this.status = OrderStatus.PROCESSING;
     }
